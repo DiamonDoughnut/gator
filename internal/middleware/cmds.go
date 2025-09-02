@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"syscall"
 	"time"
-	"errors"
 
 	"github.com/diamondoughnut/gator/internal/config"
 	sqlc "github.com/diamondoughnut/gator/internal/database"
@@ -31,39 +32,38 @@ type Command struct {
 }
 
 type Commands struct {
-	Command_list map[string]func(*State, Command) error
+	CommandList map[string]func(*State, Command) error
 }
 
 func MiddlewareLoggedIn(handler func(s *State, cmd Command, user sqlc.User) error) func(*State, Command) error {
 	return func(s *State, cmd Command) error {
 		user, err := s.Db.GetUserByName(context.Background(), s.CurrentCfg.CurrentUserName)
 		if err != nil {
-			return err
+			ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 42]: %v", sanitizeForLog(err.Error())))
 		}
 		return handler(s, cmd, user)
 	}
 }
 
 func (c *Commands) Run(s *State, cmd Command) error {
-	handler, exists := c.Command_list[cmd.Name]
+	handler, exists := c.CommandList[cmd.Name]
 	if !exists {
-		return errors.New("command not found")
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 51]: Command Does Not Exist"))
 	}
 	return handler(s, cmd)
 }
 
 func (c *Commands) Register(name string, execute func(*State, Command) error) {
-	if c.Command_list == nil {
-		c.Command_list = make(map[string]func(*State, Command) error)
+	if c.CommandList == nil {
+		c.CommandList = make(map[string]func(*State, Command) error)
 	}
-	c.Command_list[name] = execute
+	c.CommandList[name] = execute
 }
 
 func HandlerReset(s *State, cmd Command) error {
 	err := s.Db.DropUsers(context.Background())
 	if err != nil {
-		fmt.Printf("Error dropping users: %v\n", err)
-		syscall.Exit(1)
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 66]: %v", err))
 	}
 	fmt.Println("Users Cleared")
 	syscall.Exit(0)
@@ -73,8 +73,7 @@ func HandlerReset(s *State, cmd Command) error {
 func HandlerUsers(s *State, cmd Command) error {
 	users, err := s.Db.GetUsers(context.Background(), 10)
 	if err != nil {
-		fmt.Printf("Error listing users: %v\n", err)
-		syscall.Exit(1)
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 76]: %v", err))
 	}
 	for _, user := range users {
 		if s.CurrentCfg.CurrentUserName == user.Name {
@@ -102,24 +101,53 @@ type RSSItem struct {
 	PubDate     string `xml:"pubDate"`
 }
 
-func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", feedURL, nil)
+func sanitizeForLog(input string) string {
+	// Remove newlines and carriage returns to prevent log injection
+	return strings.ReplaceAll(strings.ReplaceAll(input, "\n", ""), "\r", "")
+}
+
+func validateURL(feedURL string) error {
+	parsedURL, err := url.Parse(feedURL)
 	if err != nil {
+		return fmt.Errorf("invalid URL: %v", err)
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return fmt.Errorf("only HTTP and HTTPS URLs are allowed")
+	}
+	if strings.Contains(parsedURL.Host, "localhost") || strings.Contains(parsedURL.Host, "127.0.0.1") || strings.Contains(parsedURL.Host, "::1") {
+		return fmt.Errorf("localhost URLs are not allowed")
+	}
+	return nil
+}
+
+func FetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
+	if err := validateURL(feedURL); err != nil {
 		return nil, err
 	}
-	client := http.Client{}
+ // amazonq-ignore-next-line
+	req, err := http.NewRequestWithContext(ctx, "GET", feedURL, nil)
+	if err != nil {
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 107]: %v", err))
+		return nil, err
+	}
+	client := http.Client{
+		Timeout: 30 * time.Second,
+	}
 	res, err := client.Do(req)
 	if err != nil {
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 113]: %v", sanitizeForLog(err.Error())))
 		return nil, err
 	}
 	defer res.Body.Close()
 	data, err := io.ReadAll(res.Body)
 	if err != nil {
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 119]: %v", err))
 		return nil, err
 	}
 	feed := &RSSFeed{}
 	err = xml.Unmarshal(data, feed)
 	if err != nil {
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 125]: %v", sanitizeForLog(err.Error())))
 		return nil, err
 	}
 	feed.Channel.Title = html.UnescapeString(feed.Channel.Title)
@@ -128,25 +156,34 @@ func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
 }
 
 func HandlerAgg(s *State, cmd Command) error {
-	feed, err := fetchFeed(context.Background(), "https://www.wagslane.dev/index.xml")
-	if err != nil {
-		return err
+	if len(cmd.Args) < 1 {
+		fmt.Println("Must provide a time interval")
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 136]"))
 	}
-	fmt.Printf("%v\n", feed)
-	return nil
+	interval, err := time.ParseDuration(cmd.Args[0])
+	if err != nil {
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 140]: %v", err))
+	}
+	ticker := time.NewTicker(interval)
+	for ; ; <- ticker.C {
+		scrapeFeeds(s)
+	}
 }
 
 func HandlerAddFeed(s *State, cmd Command, user sqlc.User) error {
 	if len(cmd.Args) < 2 {
 		fmt.Println("Must provide name and url")
-		syscall.Exit(1)
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 151]"))
 	}
 	name := cmd.Args[0]
 	url := cmd.Args[1]
 
+	if err := validateURL(url); err != nil {
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 155]: %v", err))
+	}
+
 	newFeed, err := s.Db.CreateFeed(context.Background(), sqlc.CreateFeedParams{Name: name, Url: url, UserID: user.ID})
 	if err != nil {
-		// Check if it's a duplicate URL error (feeds table uses url as primary key)
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "violates unique constraint") || strings.Contains(err.Error(), "feeds_pkey") {
 			_, err = s.Db.CreateFeedFollow(context.Background(), sqlc.CreateFeedFollowParams{ID: uuid.New(), CreatedAt: time.Now(), UpdatedAt: time.Now(), UserID: user.ID, FeedUrl: url})
 			if err != nil {
@@ -154,18 +191,16 @@ func HandlerAddFeed(s *State, cmd Command, user sqlc.User) error {
 					fmt.Printf("Already following this feed\n")
 					return nil
 				}
-				fmt.Printf("Feed already exists - Error creating follow: %v\n", err)
-				return err
+				ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 165]: %v", err))
 			}
 			fmt.Printf("Feed already exists - Followed\n")
 			return nil
 		}
-		fmt.Printf("Error creating feed: %v\n", err)
-		return err
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 170]: %v", err))
 	}
 	_, err = s.Db.CreateFeedFollow(context.Background(), sqlc.CreateFeedFollowParams{ID: uuid.New(), CreatedAt: time.Now(), UpdatedAt: time.Now(), UserID: user.ID, FeedUrl: newFeed.Url})
 	if err != nil {
-		return err
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 174]: %v", err))
 	}
 	fmt.Printf("Feed created and followed: %s\n", name)
 	return nil
@@ -174,12 +209,12 @@ func HandlerAddFeed(s *State, cmd Command, user sqlc.User) error {
 func HandlerFeeds(s *State, cmd Command) error {
 	feeds, err := s.Db.GetFeeds(context.Background())
 	if err != nil {
-		return err
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 183]: %v", err))
 	}
 	for _, feed := range feeds {
 		user, err := s.Db.GetUser(context.Background(), feed.UserID)
 		if err != nil {
-			return err
+			ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 188]: %v", err))
 		}
 		fmt.Println(feed.Name)
 		fmt.Println(feed.Url)
@@ -190,29 +225,23 @@ func HandlerFeeds(s *State, cmd Command) error {
 
 func HandlerFollow(s *State, cmd Command, user sqlc.User) error {
 	if len(cmd.Args) < 1 {
-		fmt.Println("Must provide feed url")
-		syscall.Exit(1)
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 199]"))
 	}
 	if s.CurrentCfg.CurrentUserName == "" {
-		fmt.Println("No user logged in. Please login first.")
-		syscall.Exit(1)
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 202]"))
 	}
 	
-	usr_id := user.ID
 	feed, err := s.Db.GetFeedByUrl(context.Background(), cmd.Args[0])
 	if err != nil {
-		fmt.Printf("Error getting feed: %v\n", err)
-		return err
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 208]: %v", err))
 	}
-	feed_url := feed.Url
-	_, err = s.Db.CreateFeedFollow(context.Background(), sqlc.CreateFeedFollowParams{ID: uuid.New(), CreatedAt: time.Now(), UpdatedAt: time.Now(), UserID: usr_id, FeedUrl: feed_url})
+	_, err = s.Db.CreateFeedFollow(context.Background(), sqlc.CreateFeedFollowParams{ID: uuid.New(), CreatedAt: time.Now(), UpdatedAt: time.Now(), UserID: user.ID, FeedUrl: feed.Url})
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "violates unique constraint") {
 			fmt.Printf("Already following this feed\n")
 			return nil
 		}
-		fmt.Printf("Error creating feed follow: %v\n", err)
-		return err
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 217]: %v", err))
 	}
 	fmt.Printf("Feed: %v\nUser: %v\n", feed.Name, user.Name)
 	return nil
@@ -222,8 +251,7 @@ func HandlerFollowing(s *State, cmd Command, user sqlc.User) error {
 	
 	follows, err := s.Db.GetFeedFollowsForUser(context.Background(), user.ID)
 	if err != nil {
-		fmt.Printf("Error getting follows: %v\n", err)
-		return err
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 227]: %v", err))
 	}
 	for _, follow := range follows {
 		fmt.Println(follow.FeedName)
@@ -233,19 +261,17 @@ func HandlerFollowing(s *State, cmd Command, user sqlc.User) error {
 
 func HandlerLogin(s *State, cmd Command) error {
 	if len(cmd.Args) < 1 {
-		fmt.Println("no username provided")
-		syscall.Exit(1)
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 237]"))
 	}
 	usr := cmd.Args[0]
 	_, err := s.Db.GetUserByName(context.Background(), usr)
 	if err != nil {
-		fmt.Printf("User %s not found\n", usr)
-		syscall.Exit(1)
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 242]: %v", err))
 	}
 	s.CurrentCfg.CurrentUserName = usr
 	err = config.SetUser(usr)
 	if err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 247]: %v", err))
 	}
 	fmt.Println("Logged in as", usr)
 	return nil
@@ -253,24 +279,22 @@ func HandlerLogin(s *State, cmd Command) error {
 
 func HandlerRegister(s *State, cmd Command) error {
 	if len(cmd.Args) < 1 {
-		fmt.Println("no username provided")
-		syscall.Exit(1)
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 255]"))
 	}
 	usr := cmd.Args[0]
 	_, err := s.Db.GetUserByName(context.Background(), usr)
 	if err == nil {
-		fmt.Println("User already exists")
-		syscall.Exit(1)
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 260]: %v", err))
 	}
 	_, err = s.Db.CreateUser(context.Background(), sqlc.CreateUserParams{ID: uuid.New(), CreatedAt: time.Now(), UpdatedAt: time.Now(), Name: usr})
 	if err != nil {
-		return fmt.Errorf("failed to create user: %w", err)
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 264]: %v", err))
 	}
 	fmt.Println("Registered user:", usr)
 	s.CurrentCfg.CurrentUserName = usr
 	err = config.SetUser(usr)
 	if err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 270]: %v", err))
 	}
 	fmt.Println("Logged in as", usr)
 	return nil
@@ -278,13 +302,34 @@ func HandlerRegister(s *State, cmd Command) error {
 
 func HandlerUnfollow(s *State, cmd Command, user sqlc.User) error {
 	if len(cmd.Args) < 1 {
-		fmt.Println("Must provide feed url")
-		syscall.Exit(1)
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 278]"))
 	}
 	err := s.Db.DeleteFeedFollowByUserAndFeedUrl(context.Background(), sqlc.DeleteFeedFollowByUserAndFeedUrlParams{UserID: user.ID, FeedUrl: cmd.Args[0]})
 	if err != nil {
-		fmt.Printf("Error deleting feed follow: %v\n", err)
-		return err
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 282]: %v", err))
 	}
 	return nil
+}
+
+func scrapeFeeds(s *State) {
+	feed, err := s.Db.GetNextFeedToFetch(context.Background())
+	if err != nil {
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 290]: %v", err))
+	}
+	err = s.Db.MarkFeedFetched(context.Background(), feed.Url)
+	if err != nil {
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 294]: %v", err))
+	}
+	feedData, err := FetchFeed(context.Background(), feed.Url)
+	if err != nil {
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 298]: %v", err))
+	}
+	feedItems := feedData.Channel.Item
+	for _, item := range feedItems {
+		fmt.Println(item.Title)
+	}
+}
+
+func ThrowError(err error) {
+	log.Fatal(err)
 }

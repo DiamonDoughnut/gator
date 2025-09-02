@@ -10,12 +10,20 @@ type Config struct{
 	CurrentUserName string `json:"current_user_name"`
 }
 
-func Read() (Config, error){
+func ConfigPath() (string, error){
 	configPath, err := os.UserHomeDir()
+	if err != nil{
+		return "", err
+	}
+	configPath +=  "/.gatorconfig.json"
+	return configPath, nil
+}
+
+func Read() (Config, error){
+	configPath, err := ConfigPath()
 	if err != nil{
 		return Config{}, err
 	}
-	configPath +=  "/.gatorconfig.json"
 	configFile, err := os.ReadFile(configPath)
 	if err != nil{
 		return Config{}, err
@@ -29,26 +37,21 @@ func Read() (Config, error){
 }
 
 func SetUser(user string) error {
-	configPath, err := os.UserHomeDir()
+	data, err := Read()
 	if err != nil{
 		return err
 	}
-	configPath +=  "/.gatorconfig.json"
-	configFile, err := os.ReadFile(configPath)
-	if err != nil{
-		return err
-	}
-	var data Config
-	err = json.Unmarshal(configFile, &data)
-	if err != nil{
-		return err
-	}
+	
 	data.CurrentUserName = user
-	configFile, err = json.Marshal(data)
+	configFile, err := json.Marshal(data)
 	if err != nil{
 		return err
 	}
-	err = os.WriteFile(configPath, configFile, 0644)
+	configPath, err := ConfigPath()
+	if err != nil{
+		return err
+	}
+	err = os.WriteFile(configPath, configFile, 0600)
 	if err != nil{
 		return err
 	}

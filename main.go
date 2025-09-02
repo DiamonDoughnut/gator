@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"syscall"
 
 	"github.com/diamondoughnut/gator/internal/config"
 	sqlc "github.com/diamondoughnut/gator/internal/database"
@@ -20,15 +19,16 @@ func main() {
 	currentConfig, err := config.Read()
 	if err != nil {
 		fmt.Printf("Error reading config: %v\n", err)
-		syscall.Exit(1)
+		os.Exit(1)
 	}
 	currentState := middleware.State{}
 	currentState.CurrentCfg = &currentConfig
 	db, err := sql.Open("postgres", currentConfig.DbUrl)
 	if err != nil {
 		fmt.Printf("Error accessing database: %v\n", err)
-		syscall.Exit(1)
+		os.Exit(1)
 	}
+	defer db.Close()
 	dbQueries := sqlc.New(db)
 	currentState.Db = dbQueries
 	commands := middleware.Commands{}
@@ -45,16 +45,14 @@ func main() {
 	args := os.Args
 	if len(args) < 2 {
 		fmt.Println("No command provided")
-		syscall.Exit(1)
+		os.Exit(1)
 	}
 	commandArg := args[1]
 	commandArgs := args[2:]
 	err = commands.Run(&currentState, middleware.Command{Name: commandArg, Args: commandArgs, Execute: nil})
 	if err != nil {
 		fmt.Printf("Error running command: %v\n", err)
-		syscall.Exit(1)
+		os.Exit(1)
 	}
 }
-
-
 
