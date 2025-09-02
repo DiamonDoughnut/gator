@@ -6,10 +6,12 @@ A command-line RSS feed aggregator built in Go that allows users to manage and m
 
 - **User Management**: Register, login, and manage multiple users
 - **Feed Management**: Add, follow, unfollow, and list RSS feeds
-- **Automatic Aggregation**: Periodically fetch and display new RSS items
+- **Automatic Aggregation**: Periodically fetch and store RSS items in database
+- **Post Browsing**: View recent posts from your followed feeds
 - **Database Storage**: PostgreSQL backend with SQLC for type-safe queries
 - **Security**: Built-in protections against SSRF attacks and log injection
 - **Multi-user Support**: Each user can follow their own set of feeds
+- **Duplicate Prevention**: Automatic handling of duplicate feeds and posts
 
 ## Prerequisites
 
@@ -117,6 +119,28 @@ Examples:
 **Recommended intervals:**
 - Development/Testing: `300s` (5 minutes)
 - Production: `1h` (1 hour) or `30m` (30 minutes)
+- **Minimum interval**: `120s` (2 minutes) - enforced to prevent server overload
+
+### Browse Posts
+
+View recent posts from your followed feeds:
+```bash
+./gator browse [limit]
+```
+
+Examples:
+```bash
+./gator browse      # Show 2 most recent posts (default)
+./gator browse 10   # Show 10 most recent posts
+./gator browse 50   # Show 50 most recent posts
+```
+
+Posts are displayed with:
+- Title
+- URL
+- Description
+- Publication date
+- Source feed URL
 
 ## Project Structure
 
@@ -136,11 +160,13 @@ gator/
 │   ├── queries/                # SQL queries for SQLC
 │   │   ├── users.sql
 │   │   ├── feeds.sql
-│   │   └── feed_follows.sql
+│   │   ├── feed_follows.sql
+│   │   └── posts.sql
 │   └── schema/                 # Database migrations
 │       ├── 001_users.sql
 │       ├── 002_feeds.sql
-│       └── 003_feed_follows.sql
+│       ├── 003_feed_follows.sql
+│       └── 004_posts.sql
 ├── sqlc.yaml                   # SQLC configuration
 ├── go.mod
 ├── go.sum
@@ -149,11 +175,26 @@ gator/
 
 ## Database Schema
 
-The application uses three main tables:
+The application uses four main tables:
 
 - **users**: Store user information with UUID primary keys
 - **feeds**: Store RSS feed URLs and metadata
 - **feed_follows**: Junction table linking users to their followed feeds
+- **posts**: Store individual RSS posts/articles with metadata
+
+## Key Features
+
+### Post Storage & Retrieval
+- **Persistent Storage**: All RSS posts are stored in PostgreSQL for offline browsing
+- **Duplicate Prevention**: Automatic detection and skipping of duplicate posts
+- **Flexible Date Parsing**: Supports multiple RSS date formats
+- **User-Specific Browsing**: Only see posts from feeds you follow
+
+### Smart Aggregation
+- **Rate Limiting**: Minimum 2-minute interval prevents server overload
+- **Automatic Cycling**: Continuously fetches from different feeds in rotation
+- **Error Handling**: Graceful handling of network issues and malformed feeds
+- **Feed Tracking**: Tracks last fetch time for each feed
 
 ## Security Features
 
