@@ -127,7 +127,7 @@ func FetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
  // amazonq-ignore-next-line
 	req, err := http.NewRequestWithContext(ctx, "GET", feedURL, nil)
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 107]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 130]: %v", err))
 		return nil, err
 	}
 	client := http.Client{
@@ -135,19 +135,19 @@ func FetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
 	}
 	res, err := client.Do(req)
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 113]: %v", sanitizeForLog(err.Error())))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 138]: %v", sanitizeForLog(err.Error())))
 		return nil, err
 	}
 	defer res.Body.Close()
 	data, err := io.ReadAll(res.Body)
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 119]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 144]: %v", err))
 		return nil, err
 	}
 	feed := &RSSFeed{}
 	err = xml.Unmarshal(data, feed)
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 125]: %v", sanitizeForLog(err.Error())))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 150]: %v", sanitizeForLog(err.Error())))
 		return nil, err
 	}
 	feed.Channel.Title = html.UnescapeString(feed.Channel.Title)
@@ -158,11 +158,14 @@ func FetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
 func HandlerAgg(s *State, cmd Command) error {
 	if len(cmd.Args) < 1 {
 		fmt.Println("Must provide a time interval")
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 136]"))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 161]"))
 	}
 	interval, err := time.ParseDuration(cmd.Args[0])
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 140]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 165]: %v", err))
+	}
+	if interval < time.Second * 120  {
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 168]: Interval must be at least 2 minutes"))
 	}
 	ticker := time.NewTicker(interval)
 	for ; ; <- ticker.C {
@@ -173,13 +176,13 @@ func HandlerAgg(s *State, cmd Command) error {
 func HandlerAddFeed(s *State, cmd Command, user sqlc.User) error {
 	if len(cmd.Args) < 2 {
 		fmt.Println("Must provide name and url")
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 151]"))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 179]"))
 	}
 	name := cmd.Args[0]
 	url := cmd.Args[1]
 
 	if err := validateURL(url); err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 155]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 185]: %v", err))
 	}
 
 	newFeed, err := s.Db.CreateFeed(context.Background(), sqlc.CreateFeedParams{Name: name, Url: url, UserID: user.ID})
@@ -191,16 +194,16 @@ func HandlerAddFeed(s *State, cmd Command, user sqlc.User) error {
 					fmt.Printf("Already following this feed\n")
 					return nil
 				}
-				ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 165]: %v", err))
+				ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 197]: %v", err))
 			}
 			fmt.Printf("Feed already exists - Followed\n")
 			return nil
 		}
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 170]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 202]: %v", err))
 	}
 	_, err = s.Db.CreateFeedFollow(context.Background(), sqlc.CreateFeedFollowParams{ID: uuid.New(), CreatedAt: time.Now(), UpdatedAt: time.Now(), UserID: user.ID, FeedUrl: newFeed.Url})
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 174]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 206]: %v", err))
 	}
 	fmt.Printf("Feed created and followed: %s\n", name)
 	return nil
@@ -209,12 +212,12 @@ func HandlerAddFeed(s *State, cmd Command, user sqlc.User) error {
 func HandlerFeeds(s *State, cmd Command) error {
 	feeds, err := s.Db.GetFeeds(context.Background())
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 183]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 215]: %v", err))
 	}
 	for _, feed := range feeds {
 		user, err := s.Db.GetUser(context.Background(), feed.UserID)
 		if err != nil {
-			ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 188]: %v", err))
+			ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 220]: %v", err))
 		}
 		fmt.Println(feed.Name)
 		fmt.Println(feed.Url)
@@ -225,15 +228,15 @@ func HandlerFeeds(s *State, cmd Command) error {
 
 func HandlerFollow(s *State, cmd Command, user sqlc.User) error {
 	if len(cmd.Args) < 1 {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 199]"))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 231]"))
 	}
 	if s.CurrentCfg.CurrentUserName == "" {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 202]"))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 234]"))
 	}
 	
 	feed, err := s.Db.GetFeedByUrl(context.Background(), cmd.Args[0])
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 208]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 239]: %v", err))
 	}
 	_, err = s.Db.CreateFeedFollow(context.Background(), sqlc.CreateFeedFollowParams{ID: uuid.New(), CreatedAt: time.Now(), UpdatedAt: time.Now(), UserID: user.ID, FeedUrl: feed.Url})
 	if err != nil {
@@ -241,7 +244,7 @@ func HandlerFollow(s *State, cmd Command, user sqlc.User) error {
 			fmt.Printf("Already following this feed\n")
 			return nil
 		}
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 217]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 247]: %v", err))
 	}
 	fmt.Printf("Feed: %v\nUser: %v\n", feed.Name, user.Name)
 	return nil
@@ -251,7 +254,7 @@ func HandlerFollowing(s *State, cmd Command, user sqlc.User) error {
 	
 	follows, err := s.Db.GetFeedFollowsForUser(context.Background(), user.ID)
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 227]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 257]: %v", err))
 	}
 	for _, follow := range follows {
 		fmt.Println(follow.FeedName)
@@ -261,17 +264,17 @@ func HandlerFollowing(s *State, cmd Command, user sqlc.User) error {
 
 func HandlerLogin(s *State, cmd Command) error {
 	if len(cmd.Args) < 1 {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 237]"))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 267]"))
 	}
 	usr := cmd.Args[0]
 	_, err := s.Db.GetUserByName(context.Background(), usr)
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 242]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 272]: %v", err))
 	}
 	s.CurrentCfg.CurrentUserName = usr
 	err = config.SetUser(usr)
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 247]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 277]: %v", err))
 	}
 	fmt.Println("Logged in as", usr)
 	return nil
@@ -279,22 +282,22 @@ func HandlerLogin(s *State, cmd Command) error {
 
 func HandlerRegister(s *State, cmd Command) error {
 	if len(cmd.Args) < 1 {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 255]"))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 285]"))
 	}
 	usr := cmd.Args[0]
 	_, err := s.Db.GetUserByName(context.Background(), usr)
 	if err == nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 260]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 290]: %v", err))
 	}
 	_, err = s.Db.CreateUser(context.Background(), sqlc.CreateUserParams{ID: uuid.New(), CreatedAt: time.Now(), UpdatedAt: time.Now(), Name: usr})
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 264]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 294]: %v", err))
 	}
 	fmt.Println("Registered user:", usr)
 	s.CurrentCfg.CurrentUserName = usr
 	err = config.SetUser(usr)
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 270]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 300]: %v", err))
 	}
 	fmt.Println("Logged in as", usr)
 	return nil
@@ -302,11 +305,11 @@ func HandlerRegister(s *State, cmd Command) error {
 
 func HandlerUnfollow(s *State, cmd Command, user sqlc.User) error {
 	if len(cmd.Args) < 1 {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 278]"))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 308]"))
 	}
 	err := s.Db.DeleteFeedFollowByUserAndFeedUrl(context.Background(), sqlc.DeleteFeedFollowByUserAndFeedUrlParams{UserID: user.ID, FeedUrl: cmd.Args[0]})
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 282]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 312]: %v", err))
 	}
 	return nil
 }
@@ -314,15 +317,15 @@ func HandlerUnfollow(s *State, cmd Command, user sqlc.User) error {
 func scrapeFeeds(s *State) {
 	feed, err := s.Db.GetNextFeedToFetch(context.Background())
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 290]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 320]: %v", err))
 	}
 	err = s.Db.MarkFeedFetched(context.Background(), feed.Url)
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 294]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 324]: %v", err))
 	}
 	feedData, err := FetchFeed(context.Background(), feed.Url)
 	if err != nil {
-		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 298]: %v", err))
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 328]: %v", err))
 	}
 	feedItems := feedData.Channel.Item
 	for _, item := range feedItems {
