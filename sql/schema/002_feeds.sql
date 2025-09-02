@@ -1,0 +1,9 @@
+-- +goose Up
+CREATE TABLE IF NOT EXISTS feeds (
+    name VARCHAR(255) NOT NULL,
+    url VARCHAR(255) PRIMARY KEY NOT NULL,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE NOT NULL
+);
+
+-- +goose Down
+DROP TABLE feeds;
