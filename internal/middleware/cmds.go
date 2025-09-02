@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"database/sql"
 	"encoding/xml"
 	"fmt"
 	"html"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -329,8 +331,76 @@ func scrapeFeeds(s *State) {
 	}
 	feedItems := feedData.Channel.Item
 	for _, item := range feedItems {
-		fmt.Println(item.Title)
+		title := item.Title
+		url := item.Link
+		description := item.Description
+		var published_at_xml XMLtime
+		err := xml.Unmarshal([]byte(item.PubDate), &published_at_xml)
+		if err != nil {
+			if err != io.EOF {
+				ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 340]: %v", err))
+			}
+		}
+		published_at := sql.NullTime{Time: published_at_xml.Time, Valid: !published_at_xml.Time.IsZero()}
+		feed_url := feed.Url
+		
+		_, err = s.Db.CreatePost(context.Background(), sqlc.CreatePostParams{CreatedAt: time.Now(), UpdatedAt: time.Now(), Title: title, Url: url, Description: description, PublishedAt: published_at, FeedUrl: feed_url})
+		if err != nil {
+			if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "violates unique constraint") {
+				continue
+			}
+			ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 352]: %v", err))
+		}
 	}
+	fmt.Println("Cycling feed scraper")
+}
+
+func HandlerBrowse(s *State, cmd Command, user sqlc.User) error {
+	var limit int
+	if len(cmd.Args) < 1 {
+		limit = 2
+	} else {
+		limit, _ = strconv.Atoi(cmd.Args[0])
+	}
+	posts, err := s.Db.GetPostsForUser(context.Background(), sqlc.GetPostsForUserParams{UserID: user.ID, Limit: int32(limit)})
+	if err != nil {
+		ThrowError(fmt.Errorf("[GATOR: CMDS.GO: LINE 365]: %v", err))
+	}
+	for _, post := range posts {
+		fmt.Println(post.Title)
+		fmt.Println(post.Url)
+		fmt.Println(post.Description)
+		fmt.Println(post.PublishedAt.Time)
+		fmt.Println(post.FeedUrl)
+		fmt.Println()
+	}
+	return nil
+}
+
+type XMLtime struct {
+	time.Time
+}
+
+func (t *XMLtime) UnmarshalText(text []byte) error {
+	formats := []string{
+		"2006-01-02T15:04:05Z07:00", 
+		"2006-01-02",                
+		"01/02/2006",                
+		"02-Jan-06",
+		"Tue, 02 Sep 2025 04:30:00 +0000",
+	}
+
+	dateStr := strings.TrimSpace(string(text))
+
+	for _, f := range formats {
+		parsedTime, err := time.Parse(f, dateStr)
+		if err == nil {
+			*t = XMLtime{parsedTime}
+			return nil
+		}
+	}
+
+	return fmt.Errorf("unable to parse date: %s", dateStr)
 }
 
 func ThrowError(err error) {
